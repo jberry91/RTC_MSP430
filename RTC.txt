@@ -1,0 +1,101 @@
+#include "msp430g2553.h"                  ; #define controlled include file
+
+         ORG      0F800h                  ; Program Reset
+
+#define  SEC R13                          ; Sets seconds to R13
+#define  MIN R14                          ; Sets minutes to R14
+#define  HR  R15                          ; Sets hours to R15
+
+RESET    mov.w    #0280h, SP              ; Initialize the stackpointer
+
+SetupWDT mov.w    #WDTPW+WDTTMSEL+WDTCNTCL+WDTSSEL,&WDTCTL
+                                          ; Stop watchdog timer
+                                          ; Set in interval timer mode
+                                          ; and set interrupt interval
+                                          ; 1s with ACLK
+
+SetupBC  bis.b    #WDTIE, &IE1            ; Enable WDT interrupt
+
+SetupP1  mov.b    #03Fh, &P1DIR           ; P1.0-P1.4 outputs
+         clr.b    &P1OUT                  ; All P1.x reset
+         bis.b    #080h, &P1IE            ; P1.7 interrupt enabled
+         bis.b    #080h, &P1IES           ; P1.7 Hi/Low edge
+         bis.b    #080h, &P1REN           ; P1.7 pull-up resistor
+         bic.b    #080h, &P1IFG           ; P1.7 IFG cleared
+         
+SetupP2  mov.b    #01Fh, &P2DIR           ; All P2.x outputs
+         clr.b    &P2OUT                  ; All P2.x reset
+         bis.b    #020h, &P2IE            ; P2.5 interrupt enabled
+         bis.b    #020h, &P2IES           ; P2.5 Hi/Low edge
+         bis.b    #020h, &P2REN           ; P2.5 pull-up resistor
+         bic.b    #020h, P2IFG            ; P2.5 IFG cleared
+         
+SetupT   mov.b    #000h, SEC              ; Set seconds to 0
+         mov.b    #000h, MIN              ; Set minutes to 0
+         mov.b    #00Ch, P2OUT            ; Set hour LED's to 12 AM(LED off)
+         mov.b    #00Bh, HR               ; Set hours to 11
+         mov.b    #000h, P1OUT            ; Set minute LED's to 0
+         
+Main     bis.w    #LPM3+GIE, SR           ; Enter LPM3, enable interrupts
+         jmp      Main                    ; Endless loop
+         
+;         Overall clock control            
+Clock:      setc                            ; Set Carry Bit.
+SecAdv      add.b   #0001h, SEC             ; Increment seconds decimally
+            cmp.b   #003Ch, R13             ; One minute elapsed?
+            jlo     ClockendS               ; No, return
+            clr.b   SEC                     ; Yes, clear seconds
+            
+MinAdv      add.b   #0001h, MIN             ; Increment minutes decimally
+            cmp.b   #003Ch, R14             ; Sixty minutes elapsed?
+            jlo     ClockendM               ; No, return
+            clr.b   MIN                     ; Yes, clear minutes
+            mov.b   #00000000b, P1OUT       ; Set minute LED's to 0
+            
+HrAdv       add.b   #0001h, HR              ; Increment Hours Decimally  
+            cmp.b   #000Ch, R15             ; 12 hours elapsed?
+            jlo     ClockendH               ; No, check AM/PM
+            clr.b   HR                      ; Yes, clear hours
+            xor.b   #00001101b, P2OUT       ; Set the hour LED's to 1
+                                            ; Never hour 0 in this format
+                                            
+;                 return to main loop           
+ClockendS:  ret                             ; return
+
+;          Incriment minutes and return to main loop
+ClockendM:  add.b   #00000001b, P1OUT       ; Incriment Minute LED's
+            ret                             ; return
+            
+;          Increment hours, check AM/PM status, and return to main loop
+ClockendH:  add.b   #00000001b, P2OUT       ; Increment Hour LED's
+            cmp.b   #000Bh, HR              ; 11 Hours elapsed?
+            jlo     ClockendS               ; No, return
+            xor.b   #00010000b, P2OUT       ; Yes, switch AM/PM LED
+            ret                             ; return
+         
+WDT_ISR  ; Exit LPM3, advance clock, exit interrupt
+         bic.w    #LPM3, 0(SP)            ; Clear LPM3 from TOS
+         call     #Clock                  ; Advance seconds
+         reti                             ; Return from interrupt
+         
+P1_ISR   ; Resolve interrupt and exit interrupt
+         bic.b    #080h, P1IFG            ; P1.7 IFG cleared
+         call     #MinAdv                 ; Advance the hour
+         reti                             ; Return from interrupt
+         
+P2_ISR   ; Resolve interrupt and exit interrupt
+         bic.b    #020h, P2IFG            ; P2.5 IFG cleared
+         call     #HrAdv                  ; Advance the minute
+         reti
+         
+;        Interrupt Vectors
+         ORG      0FFFEh                  ; MSP430 RESET Vector
+         DW       RESET                   ;
+         ORG      0FFF4h                  ; WDT Vector
+         DW       WDT_ISR                 ;
+         ORG      0FFE4h                  ; P1 Vector
+         DW       P1_ISR                  ;
+         ORG      0FFE6h                  ; P2 Vector
+         DW       P2_ISR                  ;
+         
+         END
